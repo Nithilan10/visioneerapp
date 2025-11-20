@@ -38,9 +38,9 @@ export async function getGLBFile(containerName: string, blobName: string): Promi
       throw new Error(`Blob ${blobName} not found in container ${containerName}`);
     }
 
-    const chunks: Uint8Array[] = [];
+    const chunks: Buffer[] = [];
     for await (const chunk of downloadResponse.readableStreamBody) {
-      chunks.push(chunk);
+      chunks.push(Buffer.from(chunk));
     }
 
     return Buffer.concat(chunks);
@@ -69,6 +69,32 @@ export async function getGLBFileUrl(containerName: string, blobName: string): Pr
       throw new Error(`GLB file ${blobName} not found in container ${containerName}`);
     }
     throw new Error(`Failed to get GLB file URL: ${error.message}`);
+  }
+}
+
+export async function uploadGLBFile(
+  containerName: string,
+  blobName: string,
+  fileBuffer: Buffer
+): Promise<string> {
+  try {
+    const client = getBlobServiceClient();
+    const containerClient = client.getContainerClient(containerName);
+
+    await containerClient.createIfNotExists({
+      access: 'blob',
+    });
+
+    const blobClient = containerClient.getBlockBlobClient(blobName);
+    await blobClient.upload(fileBuffer, fileBuffer.length, {
+      blobHTTPHeaders: {
+        blobContentType: 'model/gltf-binary',
+      },
+    });
+
+    return blobClient.url;
+  } catch (error: any) {
+    throw new Error(`Failed to upload GLB file: ${error.message}`);
   }
 }
 

@@ -71,6 +71,7 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=your-
 - `POST /api/room/upload` - Upload room photo
 - `GET /api/models/:id` - Get 3D model URL
 - `POST /api/tools/tile-calculator` - Calculate tiles
+- `POST /api/models/glb/:container/:filename` - Upload GLB file to Azure Blob Storage (multipart/form-data with `file` field)
 - `GET /api/models/glb/:container/:filename` - Download GLB file from Azure Blob Storage
 - `GET /api/models/glb/:container/:filename/url` - Get direct URL to GLB file in Azure Blob Storage
 - `GET /api/models/glb/:container` - List all GLB files in a container (optional `?prefix=` query param)

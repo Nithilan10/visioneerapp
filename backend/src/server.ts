@@ -7,7 +7,7 @@ import {getProducts, getProductById} from './services/database';
 import {getRecommendations} from './services/openai';
 import {analyzeRoom} from './services/vision';
 import {uploadFile, getFilePath} from './services/storage';
-import {getGLBFile, getGLBFileUrl, listGLBFiles} from './services/blobStorage';
+import {getGLBFile, getGLBFileUrl, listGLBFiles, uploadGLBFile} from './services/blobStorage';
 import {ApiResponse, Product, Recommendation, RoomAnalysis, TileCalculation} from './types';
 
 const app = express();
@@ -311,6 +311,44 @@ app.get('/api/models/glb/:container/:filename/url', async (req, res) => {
     };
     const statusCode = error.message?.includes('not found') ? 404 : 500;
     res.status(statusCode).json(response);
+  }
+});
+
+app.post('/api/models/glb/:container/:filename', upload.single('file'), async (req, res) => {
+  try {
+    const {container, filename} = req.params;
+
+    if (!filename.endsWith('.glb')) {
+      const response: ApiResponse<null> = {
+        success: false,
+        error: 'File must be a .glb file',
+      };
+      return res.status(400).json(response);
+    }
+
+    if (!req.file) {
+      const response: ApiResponse<null> = {
+        success: false,
+        error: 'GLB file is required',
+      };
+      return res.status(400).json(response);
+    }
+
+    const url = await uploadGLBFile(container, filename, req.file.buffer);
+
+    const response: ApiResponse<{url: string}> = {
+      success: true,
+      data: {url},
+    };
+
+    res.json(response);
+  } catch (error: any) {
+    console.error('Error uploading GLB file:', error);
+    const response: ApiResponse<null> = {
+      success: false,
+      error: error.message || 'Failed to upload GLB file',
+    };
+    res.status(500).json(response);
   }
 });
 
