@@ -4,8 +4,6 @@ import { useState, useRef } from 'react';
 import styles from '../styles/App.module.css';
 
 export default function Home() {
-  const [openaiKey, setOpenaiKey] = useState(process.env.NEXT_PUBLIC_OPENAI_API_KEY || '');
-  const [atissEndpoint, setAtissEndpoint] = useState(process.env.NEXT_PUBLIC_ATISS_ENDPOINT || '');
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -63,7 +61,7 @@ export default function Home() {
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'gpt-4-vision-preview',
+        model: 'gpt-4o',
         messages: [
           {
             role: 'user',
@@ -94,7 +92,7 @@ export default function Home() {
     return data.choices[0].message.content;
   };
 
-  const callATISSModel = async (endpoint, visionDescription) => {
+  const callTransformerModel = async (endpoint, visionDescription) => {
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -107,22 +105,89 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error(`ATISS API error: ${response.statusText}`);
+        throw new Error(`Transformer API error: ${response.statusText}`);
       }
 
       const data = await response.json();
-      return data;
+      
+      // Process transformer output: category and positions (x, y, z)
+      // Category can be one-hot encoded array or index
+      // Positions are [x, y, z] coordinates
+      const processedOutput = {
+        predictions: Array.isArray(data) ? data : (data.predictions || [data]),
+        raw: data
+      };
+
+      // Process each prediction
+      processedOutput.predictions = processedOutput.predictions.map((pred, idx) => {
+        let category;
+        let categoryIndex;
+        let positions = { x: null, y: null, z: null };
+
+        // Handle category (one-hot encoded array or index)
+        if (pred.category !== undefined) {
+          if (Array.isArray(pred.category)) {
+            // One-hot encoded: find argmax
+            categoryIndex = pred.category.indexOf(Math.max(...pred.category));
+            category = categoryIndex;
+          } else if (typeof pred.category === 'number') {
+            // Already an index
+            categoryIndex = pred.category;
+            category = categoryIndex;
+          }
+        }
+
+        // Handle positions
+        if (pred.position) {
+          positions = {
+            x: pred.position[0] || pred.position.x || null,
+            y: pred.position[1] || pred.position.y || null,
+            z: pred.position[2] || pred.position.z || null
+          };
+        } else if (pred.x !== undefined || pred.y !== undefined || pred.z !== undefined) {
+          positions = {
+            x: pred.x || null,
+            y: pred.y || null,
+            z: pred.z || null
+          };
+        }
+
+        return {
+          category,
+          categoryIndex,
+          positions,
+          raw: pred
+        };
+      });
+
+      return processedOutput;
     } catch (error) {
-      console.warn('ATISS model call failed, using mock data:', error);
+      console.warn('Transformer model call failed, using mock data:', error);
       return {
-        layout: 'Mock layout data',
-        furniture_placement: 'Mock furniture placement',
-        room_plan: 'Mock room plan'
+        predictions: [{
+          category: 0,
+          categoryIndex: 0,
+          positions: { x: 2.5, y: 0, z: 3.0 },
+          raw: { category: 0, position: [2.5, 0, 3.0] }
+        }],
+        raw: { error: 'Mock data' }
       };
     }
   };
 
-  const getRecommendations = async (apiKey, visionResult, atissResult) => {
+  const getRecommendations = async (apiKey, visionResult, transformerResult) => {
+    // Format transformer predictions for GPT
+    const predictionsText = transformerResult.predictions.map((pred, idx) => {
+      const categoryNames = ['chair', 'table', 'sofa', 'bed', 'desk', 'cabinet', 'shelf', 'lamp', 'other'];
+      const categoryName = categoryNames[pred.categoryIndex] || `category_${pred.categoryIndex}`;
+      const pos = pred.positions;
+      
+      return `Prediction ${idx + 1}:
+- Object Category: ${categoryName} (index: ${pred.categoryIndex})
+- Position: X=${pos.x !== null ? pos.x.toFixed(2) : 'N/A'}, Y=${pos.y !== null ? pos.y.toFixed(2) : 'N/A'}, Z=${pos.z !== null ? pos.z.toFixed(2) : 'N/A'}
+- Suggested placement: Place a ${categoryName} at coordinates (${pos.x !== null ? pos.x.toFixed(2) : 'N/A'}, ${pos.y !== null ? pos.y.toFixed(2) : 'N/A'}, ${pos.z !== null ? pos.z.toFixed(2) : 'N/A'})`;
+    }).join('\n\n');
+
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -134,11 +199,11 @@ export default function Home() {
         messages: [
           {
             role: 'system',
-            content: 'You are an expert interior designer. Provide detailed, actionable recommendations for room layout and design based on the room analysis and ATISS model output.'
+            content: 'You are an expert interior designer. Based on room analysis and predicted object placements from an autoregressive transformer model, provide detailed, actionable design recommendations. The transformer predicts next objects and their 3D positions (x, y, z) in the room.'
           },
           {
             role: 'user',
-            content: `Based on this room analysis:\n\n${visionResult}\n\nAnd this ATISS model output:\n\n${JSON.stringify(atissResult, null, 2)}\n\nProvide comprehensive design recommendations including:\n1. Optimal furniture placement\n2. Color scheme suggestions\n3. Lighting recommendations\n4. Layout improvements\n5. Style suggestions\n\nFormat your response in a clear, organized manner.`
+            content: `Room Analysis:\n${visionResult}\n\nPredicted Object Placements (from autoregressive transformer):\n${predictionsText}\n\nBased on this information, provide comprehensive design recommendations including:\n1. Furniture placement suggestions based on predicted positions\n2. How to arrange objects at the suggested coordinates\n3. Color scheme suggestions that complement the layout\n4. Lighting recommendations for the predicted arrangement\n5. Layout improvements and style suggestions\n6. Visual recommendations like "place a chair here" or "add a table there" based on the predicted positions\n\nFormat your response in a clear, organized manner with specific references to the predicted positions.`
           }
         ],
         max_tokens: 2000
@@ -155,16 +220,16 @@ export default function Home() {
   };
 
   const processImage = async () => {
-    const finalOpenaiKey = openaiKey.trim() || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-    const finalAtissEndpoint = atissEndpoint.trim() || process.env.NEXT_PUBLIC_ATISS_ENDPOINT;
+    const finalOpenaiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+    const finalTransformerEndpoint = process.env.NEXT_PUBLIC_TRANSFORMER_ENDPOINT;
 
     if (!finalOpenaiKey) {
-      setError('Please enter your OpenAI API key or set NEXT_PUBLIC_OPENAI_API_KEY in .env.local');
+      setError('OpenAI API key not configured. Please set NEXT_PUBLIC_OPENAI_API_KEY in .env.local');
       return;
     }
 
-    if (!finalAtissEndpoint) {
-      setError('Please enter your ATISS model endpoint or set NEXT_PUBLIC_ATISS_ENDPOINT in .env.local');
+    if (!finalTransformerEndpoint) {
+      setError('Transformer model endpoint not configured. Please set NEXT_PUBLIC_TRANSFORMER_ENDPOINT in .env.local');
       return;
     }
 
@@ -185,10 +250,10 @@ export default function Home() {
       const visionResult = await callGPTVision(finalOpenaiKey, base64Image);
       
       setActiveStep(2);
-      const atissResult = await callATISSModel(finalAtissEndpoint, visionResult);
+      const transformerResult = await callTransformerModel(finalTransformerEndpoint, visionResult);
       
       setActiveStep(3);
-      const recommendationsResult = await getRecommendations(finalOpenaiKey, visionResult, atissResult);
+      const recommendationsResult = await getRecommendations(finalOpenaiKey, visionResult, transformerResult);
       
       setRecommendations(recommendationsResult);
       setActiveStep(0);
@@ -232,34 +297,8 @@ export default function Home() {
   return (
     <div className={styles.app}>
       <div className={styles.container}>
-        <h1>🏠 Room Recommendation Pipeline</h1>
+        <h1 className={styles.title}>Room Recommendation Pipeline</h1>
         <p className={styles.subtitle}>Upload a room image to get AI-powered design recommendations</p>
-
-        <div className={styles.apiKeySection}>
-          <label htmlFor="openai-key">
-            OpenAI API Key {process.env.NEXT_PUBLIC_OPENAI_API_KEY && <span style={{color: '#4CAF50'}}>(loaded from .env)</span>}:
-          </label>
-          <input
-            type="password"
-            id="openai-key"
-            value={openaiKey}
-            onChange={(e) => setOpenaiKey(e.target.value)}
-            placeholder={process.env.NEXT_PUBLIC_OPENAI_API_KEY ? "Using .env value (or type to override)" : "sk-..."}
-          />
-        </div>
-
-        <div className={styles.atissSection}>
-          <label htmlFor="atiss-endpoint">
-            ATISS Model Endpoint (API URL) {process.env.NEXT_PUBLIC_ATISS_ENDPOINT && <span style={{color: '#4CAF50'}}>(loaded from .env)</span>}:
-          </label>
-          <input
-            type="text"
-            id="atiss-endpoint"
-            value={atissEndpoint}
-            onChange={(e) => setAtissEndpoint(e.target.value)}
-            placeholder={process.env.NEXT_PUBLIC_ATISS_ENDPOINT ? "Using .env value (or type to override)" : "https://your-atiss-model-endpoint.com/api"}
-          />
-        </div>
 
         <div
           className={`${styles.uploadSection} ${isDragging ? styles.dragover : ''}`}
@@ -267,7 +306,6 @@ export default function Home() {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
         >
-          <div className={styles.uploadIcon}>📸</div>
           <div className={styles.uploadText}>Drag & drop your room image here, or click to browse</div>
           <input
             ref={fileInputRef}
@@ -295,9 +333,9 @@ export default function Home() {
         <button
           className={styles.processBtn}
           onClick={processImage}
-          disabled={loading || !selectedFile || (!openaiKey && !process.env.NEXT_PUBLIC_OPENAI_API_KEY) || (!atissEndpoint && !process.env.NEXT_PUBLIC_ATISS_ENDPOINT)}
+          disabled={loading || !selectedFile || (!process.env.NEXT_PUBLIC_OPENAI_API_KEY) || (!process.env.NEXT_PUBLIC_TRANSFORMER_ENDPOINT)}
         >
-          🚀 Get Recommendations
+          Get Recommendations
         </button>
 
         <div className={styles.stepIndicator}>
@@ -307,7 +345,7 @@ export default function Home() {
           </div>
           <div className={`${styles.step} ${activeStep === 2 ? styles.active : activeStep > 2 ? styles.completed : ''}`}>
             <div className={styles.stepNumber}>2</div>
-            <div>ATISS Model</div>
+            <div>Transformer Model</div>
           </div>
           <div className={`${styles.step} ${activeStep === 3 ? styles.active : activeStep > 3 ? styles.completed : ''}`}>
             <div className={styles.stepNumber}>3</div>
@@ -330,7 +368,7 @@ export default function Home() {
 
         {recommendations && (
           <div className={styles.resultsSection}>
-            <h2 className={styles.resultsTitle}>✨ Design Recommendations</h2>
+            <h2 className={styles.resultsTitle}>Design Recommendations</h2>
             {formatRecommendations(recommendations)}
           </div>
         )}
