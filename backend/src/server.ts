@@ -1,12 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import path from 'path';
 import {initSampleData, getMongoClient} from './services/database';
 import {getProducts, getProductById} from './services/database';
 import {getRecommendations} from './services/openai';
 import {analyzeRoom} from './services/vision';
-import {uploadFile, getFilePath} from './services/storage';
 import {getGLBFile, getGLBFileUrl, listGLBFiles, uploadGLBFile} from './services/blobStorage';
 import {ApiResponse, Product, Recommendation, RoomAnalysis, TileCalculation} from './types';
 
@@ -15,7 +13,6 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, '../data/uploads')));
 
 const upload = multer({storage: multer.memoryStorage()});
 
@@ -120,40 +117,6 @@ app.post('/api/room/analyze', async (req, res) => {
     const response: ApiResponse<null> = {
       success: false,
       error: 'Failed to analyze room',
-    };
-    res.status(500).json(response);
-  }
-});
-
-app.post('/api/room/upload', upload.single('photo'), async (req, res) => {
-  try {
-    if (!req.file) {
-      const response: ApiResponse<null> = {
-        success: false,
-        error: 'Photo file is required',
-      };
-      return res.status(400).json(response);
-    }
-
-    const url = await uploadFile(
-      req.file.buffer,
-      req.file.originalname,
-      req.file.mimetype
-    );
-
-    const fullUrl = `http://localhost:${port}${url}`;
-
-    const response: ApiResponse<{url: string}> = {
-      success: true,
-      data: {url: fullUrl},
-    };
-
-    res.json(response);
-  } catch (error) {
-    console.error('Error uploading room photo:', error);
-    const response: ApiResponse<null> = {
-      success: false,
-      error: 'Failed to upload room photo',
     };
     res.status(500).json(response);
   }
