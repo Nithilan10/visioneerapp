@@ -3,8 +3,7 @@ import cors from 'cors';
 import multer from 'multer';
 import {initSampleData, getMongoClient} from './services/database';
 import {getProducts, getProductById} from './services/database';
-import {getRecommendations} from './services/openai';
-import {analyzeRoom} from './services/vision';
+import {getRecommendations, analyzeRoom} from './services/openai';
 import {getGLBFile, getGLBFileUrl, listGLBFiles, uploadGLBFile} from './services/blobStorage';
 import {ApiResponse, Product, Recommendation, RoomAnalysis, TileCalculation} from './types';
 
